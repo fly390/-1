@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#FFFFFF">
+  <meta name="description" content="选方向、挑兴趣标签，为你推荐最契合的社团，并可在场馆平面图中定位摊位。">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23E5484D'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23fff'/%3E%3C/svg%3E">
+  <title>社团百宝箱 · 百团大战</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- ===== 开屏页 ===== -->
+    <section id="screen-welcome" class="screen active">
+      <div class="w-inner">
+        <span class="w-date"><span id="wDate"></span></span>
+        <h1 class="w-title">社团百宝箱</h1>
+        <div class="w-sub" id="wSub"></div>
+        <p class="w-desc">选方向 → 挑兴趣标签，<br>马上为你推荐最合适的社团和摊位位置！</p>
+        <div class="w-chips" id="wChips"></div>
+        <button class="cta-solid" id="btnStart">开始选择兴趣 <span class="arr">›</span></button>
+        <button class="cta-ghost" id="btnWGuide">活动介绍 · 玩法说明</button>
+        <button class="w-skip" id="btnBrowse">先随便逛逛 ›</button>
+        <div class="w-org" id="wOrg"></div>
+        <button class="w-leader-link" id="btnLeader">负责人入口</button>
+      </div>
+    </section>
+
+    <!-- ===== 兴趣选择页（两步：模块 → 标签） ===== -->
+    <section id="screen-interests" class="screen">
+      <header class="int-head">
+        <button class="back-btn" id="btnBack">‹</button>
+      </header>
+
+      <div id="stepModule">
+        <h2 class="int-title">选择一个感兴趣的方向</h2>
+        <p class="int-sub">四大模块任选其一，再挑选里面你喜欢的标签</p>
+        <div id="moduleGrid" class="module-grid"></div>
+      </div>
+
+      <div id="stepTags" style="display:none">
+        <div class="module-pill" id="curModule" title="点击更换模块"></div>
+        <h2 class="int-title">选择你的兴趣</h2>
+        <p class="int-sub">在该模块内勾选感兴趣的标签（可多选），为你推荐最契合的社团</p>
+        <div id="tagGrid" class="tag-grid"></div>
+      </div>
+
+      <div class="int-bar">
+        <button class="mini-btn2" id="btnPrevStep" style="display:none">‹ 上一步</button>
+        <span id="selCount">第 1 步 / 共 2 步</span>
+        <button class="cta disabled" id="btnConfirm" style="display:none">至少选择 1 个兴趣</button>
+      </div>
+    </section>
+
+    <!-- ===== 主界面：推荐 / 地图 / 全部 ===== -->
+    <section id="screen-main" class="screen">
+      <header class="topbar">
+        <div class="brand"><span id="brandName"></span></div>
+        <div class="topbar-btns">
+          <button class="mini-btn" id="btnGuide">玩法</button>
+          <button class="mini-btn" id="btnRechoose">换兴趣</button>
+        </div>
+      </header>
+
+      <div class="pages">
+        <div class="page active" id="page-recommend"></div>
+        <div class="page" id="page-map"></div>
+        <div class="page" id="page-clubs"></div>
+      </div>
+
+      <nav class="bottom-nav">
+        <button data-page="recommend" class="active"><i><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></i>为你推荐</button>
+        <button data-page="map"><i><svg viewBox="0 0 24 24"><path d="M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5.5l.16-.03L9 18.9l6 2.1 5.64-1.9c.21-.07.36-.25.36-.48V3.5c0-.28-.22-.5-.5-.5zM15 19l-6-2.11V5l6 2.11V19z"/></svg></i>场地地图</button>
+        <button data-page="clubs"><i><svg viewBox="0 0 24 24"><path d="M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z"/></svg></i>全部社团</button>
+      </nav>
+    </section>
+
+    <!-- ===== 负责人模式（邀请码登录） ===== -->
+    <section id="screen-leader" class="screen">
+      <div id="leaderBody"></div>
+    </section>
+
+    <!-- ===== 详情 / 玩法弹层 ===== -->
+    <div id="modal" class="modal hidden">
+      <div class="mask"></div>
+      <div class="sheet" id="sheetBody"></div>
+    </div>
+
+  </div>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
