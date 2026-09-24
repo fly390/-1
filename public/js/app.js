@@ -938,6 +938,11 @@ function zoomToBooth(clubId) {
     var pct = state._boothPosPct && state._boothPosPct[clubId];
     var stage = $("#boStage");
     if (!stage) { openDetail(clubId); return; }
+    var mapImage = stage.querySelector(".bo-img");
+    if (mapImage && (!mapImage.complete || !mapImage.naturalWidth)) {
+      mapImage.addEventListener("load", function () { zoomToBooth(clubId); }, { once: true });
+      return;
+    }
     if (!pct) {
       var nb = CONFIG.clubs.filter(function (x) { return x.id === Number(clubId); })[0];
       toast(nb ? "「" + nb.name + "」的摊位待定，分配后可在这里定位" : "该社团摊位待定", 2.5);
@@ -1674,8 +1679,13 @@ function bindEvents() {
     if (card) openDetail(card.getAttribute("data-club"));
   });
   $("#page-map").addEventListener("click", function (e) {
-    if (state.mapMoved) return; // 拖动地图后不触发点击
     if (e.target.closest(".map-search-wrap")) return; // 搜索结果点击由结果处理器处理，不弹详情
+    var row = e.target.closest(".bl-row[data-club]");
+    if (row) {
+      zoomToBooth(row.getAttribute("data-club"));
+      return;
+    }
+    if (state.mapMoved) return; // 拖动地图后不触发地图点击
     var t = e.target.closest("[data-club]");
     if (t) openDetail(t.getAttribute("data-club"));
   });
