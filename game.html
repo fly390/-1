@@ -128,42 +128,104 @@
 </div>
  </div>
  <script>
- // 题库，你可以自由增删题目
+ // 题库，你可以自由增删题目；每局会从这 20 个题目中随机抽 5 题
  const questionList = [
-     // 明日方舟
- {
-     hint:"萨卡兹双子魔王之一，想消除萨卡兹千百年的仇恨，最终死在博士面前",
-     answer:"特蕾西娅",
-     options:["阿米娅","霜星","特蕾西娅","可露希尔"]
- },
- // 碧蓝档案
- {
-     hint:"（一周目）独自一人面对债务与外敌，手握所有阿拜多斯成员的学生牌倒下",
-     answer:"砂狼白子",
-     options:["砂狼白子","小鸟游星野","浅黄睦月","黑馆羽留奈"]
- },
- // 崩坏3
- {
-     hint:"最后一课-至少这一次，以自己的方式活下去吧",
-     answer:"姬子",
-     options:["芽衣","琪亚娜","姬子","德丽莎"]
- },
- // 少女前线
- {
-     hint:"可惜是分别的时候了，M4A1，这种琐事已经来不及计算了",
-     answer:"AR‑15",
-     options:["AR‑15","M4A1","M16A1","RO635"]
- },
- // 东方幻想乡
- {
-     hint:"曾是大小姐，操纵死亡最终绝望自杀成为冥界的亡灵公主",
-     answer:"西行寺幽幽子",
-     options:["博丽灵梦","雾雨魔理沙","西行寺幽幽子","蕾米莉亚"]
- }
+     {
+         hint: "萨卡兹双子魔王之一，想消除萨卡兹千百年的仇恨，最终死在博士面前",
+         answer: "特蕾西娅",
+         options: ["阿米娅", "霜星", "特蕾西娅", "可露希尔"]
+     },
+     {
+         hint: "（一周目）独自一人面对债务与外敌，手握所有阿拜多斯成员的学生牌倒下",
+         answer: "砂狼白子",
+         options: ["砂狼白子", "小鸟游星野", "浅黄睦月", "黑馆羽留奈"]
+     },
+     {
+         hint: "最后一课——至少这一次，以自己的方式活下去吧",
+         answer: "姬子",
+         options: ["芽衣", "琪亚娜", "姬子", "德丽莎"]
+     },
+     {
+         hint: "可惜是分别的时候了，M4A1，这种琐事已经来不及计算了",
+         answer: "AR‑15",
+         options: ["AR‑15", "M4A1", "M16A1", "RO635"]
+     },
+     {
+         hint: "曾是大小姐，操纵死亡最终绝望自杀成为冥界的亡灵公主",
+         answer: "西行寺幽幽子",
+         options: ["博丽灵梦", "雾雨魔理沙", "西行寺幽幽子", "蕾米莉亚"]
+     },
+     {
+         hint: "在倒塌的大楼下理解罗德岛的理念，却因黑蛇的阴谋葬送整支雪怪小队，最终用她的生命考验罗德岛的信念",
+         answer: "霜星",
+         options: ["塔露拉", "霜星", "可露希尔", "凯尔希"]
+     },
+     {
+         hint: "独自吸收两段尘世之音，阻止灾难扩散，却被源石晶体的力量吞噬。'想起我的时候，你应当笑，而不是哭'",
+         answer: "白垩",
+         options: ["车尔尼", "黑键", "阿尔图罗", "白垩"]
+     },
+     {
+         hint: "E3小队的队长,从切城突围时主动留下殿后，在与黑蛇的对抗中牺牲",
+         answer: "ACE",
+         options: ["mantra", "radian", "Guard", "ACE"]
+     },
+     {
+         hint: "本意为塔卫二的移民寻找出路，却被天意扭曲走上极端道路，死前的苏醒无法改变悲剧",
+         answer: "阮一",
+         options: ["小葱", "汤汤", "阮一", "庄方宜"]
+     },
+     {
+         hint: "伊比利亚审判官，独自留守灯塔。就算他已经倒下，提灯的火焰依旧没有熄灭。",
+         answer: "达里奥",
+         options: ["艾丽妮", "达里奥", "乌尔比安", "斯卡蒂"]
+     },
+     {
+         hint: "预言无法被被推翻，只能欺骗天理。预言之日，最终亲手完成对自己的死刑",
+         answer: "芙卡洛斯",
+         options: ["归终", "芙卡洛斯", "芙宁娜", "娜维娅"]
+     },
+     {
+         hint: "出现在无名之人面前的‘无罪的孩子’最终以一声轰鸣留下传奇",
+         answer: "爱莉希雅",
+         options: ["米卡", "卡莲", "爱莉希雅", "布洛妮娅"]
+     },
+     {
+         hint: "擅长治国，理念是珍惜须臾的美好，却死于坎瑞亚战场",
+         answer: "雷电真",
+         options: ["雷电真", "雷电影", "枫原万叶", "九条裟罗"]
+     },
+     {
+         hint: "彻底抹除自己在世界树的全部存在来根除污染，被世界遗忘",
+         answer: "大慈树王",
+         options: ["散兵", "妮露", "纳西妲", "大慈树王"]
+     },
+     {
+         hint: "为保护露娜独自迎战异合生物，核心损毁死亡。'我会陪你，直到看见你想要的结局'",
+         answer: "罗兰",
+         options: ["拉弥亚", "罗兰", "加百列", "露西亚"]
+     },
+     {
+         hint: "被欺骗打开黑潮，决战时恢复神智，用尽力量化作石像封印黑潮，完成赎罪而死",
+         answer: "芬莱克",
+         options: ["芬莱克", "卡提希娅", "菲比啾比", "小土豆"]
+     },
+     {
+         hint: "只想过普通人的生活，最后却连生日蛋糕都没能吃上",
+         answer: "达尼娅",
+         options: ["达尼娅", "西格莉卡", "洛瑟拉", "绯雪"]
+     },
+     {
+         hint: "为守住因果闭环逆行时间，主动踏入燧门迎接毁灭",
+         answer: "爱弥斯",
+         options: ["仇远", "守岸人", "爱弥斯", "琳奈"]
+     },
  ];
+ 
  let currentIndex = 0;
  let score = 0;
  let isAnswered = false;
+ let roundQuestions = [];
  const quizArea = document.getElementById("quiz-area");
  const endArea = document.getElementById("end-area");
  const hintDom = document.getElementById("hint");
@@ -175,15 +237,29 @@
  const nextBtn = document.getElementById("nextBtn");
  const restartBtn = document.getElementById("restartBtn");
  const finalScoreDom = document.getElementById("final-score");
- totalDom.innerText = questionList.length;
+ 
+ function shuffleArray(arr) {
+     const copy = [...arr];
+     for (let i = copy.length - 1; i > 0; i--) {
+         const j = Math.floor(Math.random() * (i + 1));
+         [copy[i], copy[j]] = [copy[j], copy[i]];
+     }
+     return copy;
+ }
+ 
+ function buildRoundQuestions() {
+     return shuffleArray(questionList).slice(0, 5);
+ }
+ 
  //渲染单题
  function renderQuestion(){
      isAnswered = false;
      msgDom.innerText = "";
      nextBtn.disabled = true;
-     const q = questionList[currentIndex];
+     const q = roundQuestions[currentIndex];
      hintDom.innerText = q.hint;
      currentDom.innerText = currentIndex + 1;
+     totalDom.innerText = roundQuestions.length;
      optionBox.innerHTML = "";
      q.options.forEach(opt=>{
          const btn = document.createElement("button");
@@ -217,7 +293,7 @@
  //下一题
  nextBtn.onclick = function(){
      currentIndex++;
-     if(currentIndex >= questionList.length){
+     if(currentIndex >= roundQuestions.length){
          showEnd();
      }else{
          renderQuestion();
@@ -242,11 +318,15 @@
      currentIndex = 0;
      score = 0;
      scoreDom.innerText = 0;
+     roundQuestions = buildRoundQuestions();
+     totalDom.innerText = roundQuestions.length;
      quizArea.classList.remove("hide");
      endArea.classList.add("hide");
      renderQuestion();
  }
  //启动游戏
+ roundQuestions = buildRoundQuestions();
+ totalDom.innerText = roundQuestions.length;
  renderQuestion();
  </script>
  </body>

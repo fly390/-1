@@ -118,7 +118,7 @@ function boothZone(club) {
 function clubById(id) {
   return CONFIG.clubs.filter(function (c) { return c.id === Number(id); })[0];
 }
-function isRealClub(c) { return !!c.module; } // 赞助商等非社团摊位不参与推荐
+function isRealClub(c) { return !!(c && c.module); } // 赞助商等非社团摊位不参与推荐
 function statusText(c) { return STATUS_TEXT[c.status] || "摆摊中"; }
 
 /* ---------------- 屏幕切换 ---------------- */
@@ -257,12 +257,24 @@ function boothPill(club) {
   return '<span class="booth-pill pending">摊位待定</span>';
 }
 
-/* 社团头像：有照片用第一张照片，没有用 logo emoji（照片接口；data-fb 为加载失败兜底） */
+function mapEntry(club) {
+  return club.booth
+    ? '<button class="map-entry" type="button" data-map-club="' + club.id + '">' + ICONS.pin + '在地图中查看摊位</button>'
+    : "";
+}
+
+/* 社团头像：图片图标 > 第一张活动照片 > logo emoji（data-fb 为图片加载失败兜底） */
 function clubLogo(club) {
-  if (club.photos && club.photos[0]) {
-    return '<img src="' + esc(club.photos[0]) + '" alt="' + esc(club.name) + '" data-fb="' + esc(club.logo) + '" loading="lazy" decoding="async">';
+  var logo = String(club.logo || "");
+  var isImg = logo.indexOf("/uploads/") === 0;
+  var emoji = isImg ? "" : logo;
+  if (isImg) {
+    return '<img src="' + esc(logo) + '" alt="' + esc(club.name) + '" data-fb="' + esc(emoji) + '" loading="lazy" decoding="async">';
   }
-  return club.logo;
+  if (club.photos && club.photos[0]) {
+    return '<img src="' + esc(club.photos[0]) + '" alt="' + esc(club.name) + '" data-fb="' + esc(emoji) + '" loading="lazy" decoding="async">';
+  }
+  return esc(emoji);
 }
 
 function clubCard(club, s, i, ranked) {
@@ -283,6 +295,7 @@ function clubCard(club, s, i, ranked) {
     '</div></div>' +
     (tags ? '<div class="c-tags">' + tags + '</div>' : "") +
     '<div class="c-foot">' + match + boothPill(club) + '<span class="c-more">查看详情 ›</span></div>' +
+    mapEntry(club) +
     '</div>';
 }
 
@@ -320,7 +333,7 @@ function renderRecommend() {
 
 /* ---------------- 场地地图（缩放 / 拖动 / 搜索） ---------------- */
 function isRecommended(club) {
-  return state.selected.length > 0 && isRealClub(club) && scoreClub(club).matched.length > 0;
+  return !!club && state.selected.length > 0 && isRealClub(club) && scoreClub(club).matched.length > 0;
 }
 
 /* --- 场馆平面图（仿百团大战场馆图）：由 MAP_LAYOUT 生成 SVG，可缩放/点击/搜索定位 --- */
@@ -394,26 +407,354 @@ function buildVenueSvg(L) {
   return svg;
 }
 
+/* --- 真实场馆图模式：底图 + 编号名牌（BOOTH_LAYOUT 分段等分 + 服务端拖动覆盖） --- */
+function moduleColor(c) {
+  var m = (CONFIG.modules || []).filter(function (x) { return x.id === c.module; })[0];
+  return m ? m.color : "#E5484D";
+}
+function boothBasePositions() {
+  var pos = {};
+  (CONFIG.boothLayout.segments || []).forEach(function (s) {
+    var n = Math.abs(s.to - s.from);
+    for (var i = 0; i <= n; i++) {
+      var t = n ? i / n : 0;
+      pos[s.from + (s.to > s.from ? i : -i)] = {
+        x: s.x1 + (s.x2 - s.x1) * t,
+        y: s.y1 + (s.y2 - s.y1) * t,
+        kind: s.kind || "ring",
+        wide: !!s.wide
+      };
+    }
+  });
+  return pos;
+}
+function boothPosNow(label) {
+  if (!state._boothBase) state._boothBase = boothBasePositions();
+  var base = state._boothBase[String(label)];
+  if (!base) return null;
+  var ov = (state._layoutDraft && state._layoutDraft[label]) ||
+    (CONFIG.remoteLayout && CONFIG.remoteLayout.positions && CONFIG.remoteLayout.positions[label]);
+  return ov ? { x: ov.x, y: ov.y, kind: base.kind, wide: base.wide } : base;
+}
+function buildVenueImage() {
+  state._boothBase = boothBasePositions();
+  state._boothPosPct = {};
+  var clubByBooth = {};
+  CONFIG.clubs.forEach(function (c) { if (c.booth) clubByBooth[String(c.booth)] = c; });
+
+  var html = '<div class="bo-stage" id="boStage"><img class="bo-img" src="' + esc(CONFIG.mapImage) + '" alt="场地摊位图" draggable="false">';
+  html += '<div class="bo-overview" aria-hidden="true">' +
+    '<span class="bo-region bo-stage-area">舞台</span>' +
+    '<span class="bo-region bo-audience-area">观众<br>座位区</span>' +
+    '<span class="bo-region bo-gate-area">门头</span>' +
+      '<span class="bo-region bo-service-zone">服务区</span>' +
+    '</div>';
+  function addRange(labels, range, inset) {
+    var points = labels.map(function (label) { return state._boothBase[String(label)]; }).filter(Boolean);
+    if (!points.length) return;
+    inset = inset == null ? 2.5 : inset;
+    var xs = points.map(function (p) { return p.x; });
+    var ys = points.map(function (p) { return p.y; });
+    var left = Math.max(1, Math.min.apply(null, xs) - inset);
+    var top = Math.max(1, Math.min.apply(null, ys) - inset);
+    var right = Math.min(99, Math.max.apply(null, xs) + inset);
+    var bottom = Math.min(99, Math.max.apply(null, ys) + inset);
+    var vertical = (bottom - top) > (right - left);
+    html += '<span class="bo-range' + (vertical ? ' vertical' : '') + '" style="left:' + left + '%;top:' + top + '%;width:' + (right - left) + '%;height:' + (bottom - top) + '%"><b>' + esc(range) + '</b></span>';
+  }
+  addRange([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23], "1 - 23");
+  addRange([24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40], "24 - 40");
+  addRange([93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116], "93 - 116");
+  addRange([69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92], "80 - 92");
+  (CONFIG.boothLayout.segments || []).forEach(function (segment) {
+    var from = Math.abs(Number(segment.from));
+    var to = Math.abs(Number(segment.to));
+    var grouped = (from <= 23 && to <= 23) ||
+      (from >= 24 && from <= 40 && to >= 24 && to <= 40) ||
+      (from >= 80 && from <= 92 && to >= 80 && to <= 92) ||
+      (from >= 93 && from <= 116 && to >= 93 && to <= 116) ||
+      (from === 80 && to === 69);
+    if (grouped) return;
+    var left = Math.min(segment.x1, segment.x2) - 2.5;
+    var top = Math.min(segment.y1, segment.y2) - 2.5;
+    var width = Math.abs(segment.x2 - segment.x1) + 5;
+    var height = Math.abs(segment.y2 - segment.y1) + 5;
+    var vertical = Math.abs(segment.y2 - segment.y1) > Math.abs(segment.x2 - segment.x1);
+    var start = String(segment.from);
+    var end = String(segment.to);
+    var range = start === end ? start : start + " - " + end;
+    html += '<span class="bo-range' + (vertical ? ' vertical' : '') + '" style="left:' + left + '%;top:' + top + '%;width:' + width + '%;height:' + height + '%"><b>' + esc(range) + '</b></span>';
+  });
+  Object.keys(state._boothBase).forEach(function (label) {
+    var p = boothPosNow(label);
+    var c = clubByBooth[label];
+    var closed = c && c.status === "closed";
+    var rec = c ? isRecommended(c) : false;
+    var cls = "bo-chip " + p.kind + (p.wide ? " wide" : "") + (c ? (closed ? " on off" : " on") : "") + (rec ? " rec" : "");
+    var style = "left:" + p.x + "%;top:" + p.y + "%;";
+    if (c && !closed) style += "--bc:" + moduleColor(c) + ";";
+    html += '<button class="' + cls + '" data-booth="' + esc(label) + '"' + (c ? ' data-club="' + c.id + '"' : "") +
+      ' style="' + style + '"><b>' + esc(label) + '</b></button>';
+    if (c) state._boothPosPct[c.id] = { x: p.x, y: p.y };
+  });
+  html += '</div>';
+  return html;
+}
+
+/* 圆点随地图宽度等比缩放：--bo-u = 容器宽/829（原图 1px 的实际像素） */
+function sizeBoothStage() {
+  var stage = $("#boStage");
+  if (!stage) return;
+  var w = stage.getBoundingClientRect().width;
+  if (w > 0) stage.style.setProperty("--bo-u", (w / 829).toFixed(4) + "px");
+}
+
+/* 管理员布局模式：拖名牌微调位置 / 点名牌分配社团 */
+function setupBoothStage() {
+  var stage = $("#boStage");
+  if (!stage) return;
+  sizeBoothStage();
+  if (!window._boResizeHook) {
+    window._boResizeHook = true;
+    window.addEventListener("resize", sizeBoothStage);
+  }
+  var admin = (leadAuth() || {}).role === "admin";
+  if (!admin) {
+    stage.addEventListener("click", function (e) {
+      var chip = e.target.closest(".bo-chip");
+      if (!chip) return;
+      if (chip.getAttribute("data-club")) openDetail(Number(chip.getAttribute("data-club")));
+      else toast("摊位 " + chip.getAttribute("data-booth") + " 暂未分配社团");
+    });
+    return;
+  }
+  /* 布局工具条（renderMap 已生成 #layoutBar） */
+  state._layoutMode = false;
+  state._layoutDraft = state._layoutDraft || {};
+
+  function setMode(on) {
+    state._layoutMode = on;
+    stage.classList.toggle("layout-on", on);
+    $("#btnLayoutMode").classList.toggle("hidden", on);
+    $("#lbActions").classList.toggle("hidden", !on);
+  }
+  $("#btnLayoutMode").onclick = function () { setMode(true); };
+  $("#btnBatchAssign").onclick = openBatchAssign;
+  $("#btnLayoutExit").onclick = function () { setMode(false); };
+  $("#btnLayoutReset").onclick = function () {
+    state._layoutDraft = {};
+    renderMap();
+    toast("已还原为本次打开时的位置");
+  };
+  $("#btnLayoutSave").onclick = function () {
+    apiFetch("/api/layout", { method: "PUT", body: { positions: state._layoutDraft } }).then(function (j) {
+      CONFIG.remoteLayout = j.layout;
+      state._layoutDraft = {};
+      toast("布局已保存，所有人 20 秒内同步");
+    }).catch(function (e) { toast(e.message || "保存失败"); });
+  };
+
+  /* 拖动 / 点击分配 */
+  var drag = null;
+  stage.addEventListener("pointerdown", function (e) {
+    if (!state._layoutMode) return;
+    var chip = e.target.closest(".bo-chip");
+    if (!chip) return;
+    e.stopPropagation();
+    e.preventDefault();
+    drag = {
+      chip: chip, label: chip.getAttribute("data-booth"),
+      sx: e.clientX, sy: e.clientY, moved: false
+    };
+    state._chipDrag = drag;
+    chip.classList.add("dragging");
+  });
+  window.addEventListener("pointermove", function (e) {
+    if (!drag) return;
+    var dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+    if (!drag.moved) return;
+    var r = stage.getBoundingClientRect();
+    var x = Math.min(99, Math.max(1, (e.clientX - r.left) / r.width * 100));
+    var y = Math.min(99, Math.max(1, (e.clientY - r.top) / r.height * 100));
+    drag.chip.style.left = x + "%";
+    drag.chip.style.top = y + "%";
+    drag.x = x; drag.y = y;
+  });
+  window.addEventListener("pointerup", function () {
+    if (!drag) return;
+    state._chipDrag = null;
+    drag.chip.classList.remove("dragging");
+    if (drag.moved && drag.x != null) state._layoutDraft[drag.label] = { x: drag.x, y: drag.y };
+    else openBoothAssign(drag.label, stage);
+    drag = null;
+  });
+}
+
+/* 名牌点击 → 分配/换社团弹层（仅布局模式内） */
+function openBoothAssign(label, stage) {
+  var old = $("#boothPop");
+  if (old) old.remove();
+  var pop = document.createElement("div");
+  pop.className = "booth-pop";
+  pop.id = "boothPop";
+  pop.innerHTML =
+    '<div class="bp-card"><div class="bp-head"><b>摊位 ' + esc(label) + '</b>' +
+    '<span class="bp-close" id="bpClose">×</span></div>' +
+    '<div class="bp-search"><input id="bpSearch" type="text" placeholder="搜社团名，点选分配"></div>' +
+    '<div class="bp-list" id="bpList"></div></div>';
+  document.body.appendChild(pop);
+  pop.addEventListener("click", function (e) { if (e.target === pop) pop.remove(); });
+  $("#bpClose").onclick = function () { pop.remove(); };
+
+  function renderList(q) {
+    var rows = CONFIG.clubs.filter(function (c) {
+      return c.module && (!q || c.name.indexOf(q) >= 0);
+    }).sort(function (a, b) {
+      return (a.booth ? 0 : 1) - (b.booth ? 0 : 1) || a.id - b.id;
+    }).slice(0, 80).map(function (c) {
+      return '<div class="bp-row' + (c.booth === label ? " cur" : "") + '" data-id="' + c.id + '">' +
+        '<span class="bp-logo">' + esc(c.logo) + '</span><span class="bp-name">' + esc(c.name) + '</span>' +
+        '<span class="bp-booth">' + (c.booth ? (c.booth === label ? "当前在此" : "摊位 " + esc(c.booth)) : "未分配") + '</span></div>';
+    }).join("");
+    $("#bpList").innerHTML = rows || '<div class="bp-empty">没有匹配的社团</div>';
+  }
+  renderList("");
+  $("#bpSearch").addEventListener("input", function () { renderList(this.value.trim()); });
+  $("#bpList").addEventListener("click", function (e) {
+    var row = e.target.closest(".bp-row");
+    if (!row) return;
+    var id = Number(row.getAttribute("data-id"));
+    var club = CONFIG.clubs.filter(function (c) { return c.id === id; })[0];
+    if (!club) return;
+    if (club.booth === label) {
+      /* 点击当前占用者 → 取消分配 */
+      apiFetch("/api/club/" + id, { method: "PUT", body: { booth: "" } }).then(function () {
+        club.booth = ""; pop.remove(); renderMap(); toast("已取消 " + club.name + " 的摊位");
+      }).catch(function (er) { toast(er.message || "操作失败"); });
+      return;
+    }
+    var prev = CONFIG.clubs.filter(function (c) { return c.booth === label && c.id !== id; })[0];
+    var doAssign = function () {
+      apiFetch("/api/club/" + id, { method: "PUT", body: { booth: label } }).then(function () {
+        club.booth = label; pop.remove(); renderMap();
+        toast(club.name + " → 摊位 " + label);
+      }).catch(function (er) { toast(er.message || "操作失败"); });
+    };
+    if (prev) {
+      apiFetch("/api/club/" + prev.id, { method: "PUT", body: { booth: "" } }).then(doAssign)
+        .catch(function (er) { toast(er.message || "操作失败"); });
+    } else doAssign();
+  });
+}
+
+/* 批量填号：按社团列表直接填摊位号（方案 B 的正向入口） */
+function openBatchAssign() {
+  if (!state._boothBase) state._boothBase = boothBasePositions();
+  var old = $("#boothPop");
+  if (old) old.remove();
+  var pop = document.createElement("div");
+  pop.className = "booth-pop";
+  pop.id = "boothPop";
+  pop.innerHTML =
+    '<div class="bp-card bp-wide"><div class="bp-head"><b>按社团填摊位号</b>' +
+    '<span class="bp-close" id="bpClose">×</span></div>' +
+    '<div class="bp-search"><input id="bpSearch" type="text" placeholder="搜社团名，右侧输入摊位号（1-' +
+    Object.keys(state._boothBase).length + '）"></div>' +
+    '<div class="bp-list" id="bpList"></div></div>';
+  document.body.appendChild(pop);
+  pop.addEventListener("click", function (e) { if (e.target === pop) pop.remove(); });
+  $("#bpClose").onclick = function () { pop.remove(); };
+
+  function renderList(q) {
+    var rows = CONFIG.clubs.filter(function (c) {
+      return c.module && (!q || c.name.indexOf(q) >= 0);
+    }).sort(function (a, b) {
+      return (a.booth ? 0 : 1) - (b.booth ? 0 : 1) || a.id - b.id;
+    }).slice(0, 200).map(function (c) {
+      return '<div class="bp-row' + (c.booth ? " cur" : "") + '" data-id="' + c.id + '">' +
+        '<span class="bp-logo">' + esc(c.logo) + '</span><span class="bp-name">' + esc(c.name) + '</span>' +
+        '<input class="bp-input" type="text" inputmode="numeric" maxlength="4" placeholder="号" value="' + esc(c.booth || "") + '" data-boothinput="' + c.id + '"></div>';
+    }).join("");
+    $("#bpList").innerHTML = rows || '<div class="bp-empty">没有匹配的社团</div>';
+  }
+  renderList("");
+  $("#bpSearch").addEventListener("input", function () { renderList(this.value.trim()); });
+  $("#bpList").addEventListener("change", function (e) {
+    var input = e.target.closest(".bp-input");
+    if (!input) return;
+    var id = Number(input.getAttribute("data-boothinput"));
+    var club = CONFIG.clubs.filter(function (c) { return c.id === id; })[0];
+    if (!club) return;
+    var label = input.value.trim();
+
+    function save(booth) {
+      apiFetch("/api/club/" + id, { method: "PUT", body: { booth: booth } }).then(function () {
+        club.booth = booth;
+        input.value = booth || "";
+        input.closest(".bp-row").classList.toggle("cur", !!booth);
+        renderMap();
+        toast(booth ? (club.name + " → 摊位 " + booth) : ("已清空 " + club.name + " 的摊位"));
+      }).catch(function (er) {
+        input.value = club.booth || "";
+        toast(er.message || "保存失败");
+      });
+    }
+
+    if (!label) { save(""); return; }
+    if (!state._boothBase[label]) {
+      input.value = club.booth || "";
+      toast("没有 " + label + " 号摊位，请填 1-" + Object.keys(state._boothBase).length);
+      return;
+    }
+    var prev = CONFIG.clubs.filter(function (c) { return c.booth === label && c.id !== id; })[0];
+    var doSave = function () { save(label); };
+    if (prev) {
+      apiFetch("/api/club/" + prev.id, { method: "PUT", body: { booth: "" } }).then(function () {
+        prev.booth = ""; doSave();
+      }).catch(function (er) { toast(er.message || "腾挪失败"); });
+    } else doSave();
+  });
+}
+
 function renderMap() {
   var box = $("#page-map");
+  var imgMode = !!(CONFIG.mapImage && CONFIG.boothLayout);
+  var isAdmin = (leadAuth() || {}).role === "admin";
   var unassigned = CONFIG.clubs.filter(function (c) { return !c.booth; });
 
-  var listRows = (CONFIG.zones || []).map(function (z) {
-    var clubs = CONFIG.clubs.filter(function (c) { return boothZone(c) === z.id; });
-    if (!clubs.length) return "";
-    return '<div class="bl-zone" style="--zc:' + z.color + '"><i></i>' + z.id + '区 · ' + esc(z.name) + '</div>' +
-      clubs.map(function (c) {
+  var listRows;
+  if (imgMode) {
+    /* 图底模式：按摊位号排序的索引列表 */
+    var assigned = CONFIG.clubs.filter(function (c) { return c.booth; })
+      .sort(function (a, b) { return parseInt(a.booth, 10) - parseInt(b.booth, 10); });
+    listRows = '<div class="bl-zone"><i></i>摊位对照表 · ' + assigned.length + ' 个社团已分配' +
+      (unassigned.length ? '（' + unassigned.length + ' 个待定）' : "") + '</div>' +
+      assigned.map(function (c) {
         return '<div class="bl-row" data-club="' + c.id + '">' +
-          '<span class="bl-no' + (c.status === "closed" ? " off" : "") + '" style="--zc:' + z.color + '">' + esc(c.booth) + '</span>' +
+          '<span class="bl-no' + (c.status === "closed" ? " off" : "") + '" style="--zc:' + moduleColor(c) + '">' + esc(c.booth) + '</span>' +
           '<span class="bl-name">' + esc(c.name) + (c.status === "closed" ? ' <em class="bl-closed">已收摊</em>' : "") + '</span>' +
           (isRecommended(c) ? '<span class="bl-love">' + ICONS.heart + '推荐</span>' : "") +
           '<span class="bl-arrow">›</span></div>';
       }).join("");
-  }).join("");
+  } else {
+    listRows = (CONFIG.zones || []).map(function (z) {
+      var clubs = CONFIG.clubs.filter(function (c) { return boothZone(c) === z.id; });
+      if (!clubs.length) return "";
+      return '<div class="bl-zone" style="--zc:' + z.color + '"><i></i>' + z.id + '区 · ' + esc(z.name) + '</div>' +
+        clubs.map(function (c) {
+          return '<div class="bl-row" data-club="' + c.id + '">' +
+            '<span class="bl-no' + (c.status === "closed" ? " off" : "") + '" style="--zc:' + z.color + '">' + esc(c.booth) + '</span>' +
+            '<span class="bl-name">' + esc(c.name) + (c.status === "closed" ? ' <em class="bl-closed">已收摊</em>' : "") + '</span>' +
+            (isRecommended(c) ? '<span class="bl-love">' + ICONS.heart + '推荐</span>' : "") +
+            '<span class="bl-arrow">›</span></div>';
+        }).join("");
+    }).join("");
+  }
 
   var mapInner;
-  if (CONFIG.mapImage) {
-    mapInner = '<img class="map-img" src="' + esc(CONFIG.mapImage) + '" alt="场地摊位图">';
+  if (imgMode) {
+    mapInner = buildVenueImage();
   } else if (CONFIG.mapLayout) {
     mapInner = buildVenueSvg(CONFIG.mapLayout);
   } else {
@@ -421,25 +762,46 @@ function renderMap() {
       '<div class="map-enter">🚩 观众入口 · 签到领取社团手册</div>';
   }
 
+  var legend;
+  if (imgMode) {
+    legend =
+      '<span class="lg" style="--c:#10AC84"><i></i>彩色 = 出摊中（按模块配色）</span>' +
+      '<span class="lg" style="--c:#A6ABB2"><i></i>灰色划线 = 已收摊</span>' +
+      '<span class="lg" style="--c:#E5484D"><i></i>红圈 = 为你推荐</span>' +
+      '<span class="lg" style="--c:#F5B041"><i></i>橙块 = 控台/咨询/医疗/候场</span>';
+  } else {
+    legend =
+      (CONFIG.zones || []).map(function (z) {
+        return '<span class="lg" style="--c:' + z.color + '"><i></i>' + z.id + '区 ' + esc(z.name) + '</span>';
+      }).join("") +
+      '<span class="lg" style="--c:' + INK + '"><i></i>主舞台 / 门头</span>' +
+      '<span class="lg" style="--c:#A6ABB2"><i></i>灰色 = 已收摊</span>';
+  }
+
+  var layoutBar = imgMode && isAdmin
+    ? '<div class="layout-bar" id="layoutBar">' +
+      '<button class="lb-btn primary" id="btnLayoutMode">✥ 布局调整</button>' +
+      '<button class="lb-btn" id="btnBatchAssign">№ 按社团填号</button>' +
+      '<div class="lb-actions hidden" id="lbActions">' +
+      '<span class="lb-hint">拖名牌调位置 · 点名牌分配社团</span>' +
+      '<button class="lb-btn" id="btnLayoutSave">保存布局</button>' +
+      '<button class="lb-btn" id="btnLayoutReset">还原本次</button>' +
+      '<button class="lb-btn" id="btnLayoutExit">完成</button></div></div>'
+    : "";
+
   box.innerHTML =
     '<div class="map-search-wrap">' +
     '<div class="search">' + ICONS.search + '<input id="mapSearch" type="text" placeholder="搜社团名 / 标签 / 摊位号，地图定位" autocomplete="off"></div>' +
     '<div class="map-results hidden" id="mapResults"></div>' +
     '</div>' +
     '<div class="map-card">' +
-    '<div class="map-title">活动场地地图' + (CONFIG.mapImage ? '' : '<span class="map-badge">场馆平面图 · 可缩放拖动</span>') + '</div>' +
+    '<div class="map-title">活动场地地图' + (imgMode ? '<span class="map-badge">真实场馆图 · 可缩放拖动</span>' : '<span class="map-badge">场馆平面图 · 可缩放拖动</span>') + '</div>' +
     '<div class="map-info">' +
     '<span class="info-pill">' + esc(CONFIG.eventDate) + '</span>' +
     '<span class="info-pill">' + esc(CONFIG.location) + '</span>' +
     '</div>' +
-    '<div class="legend">' +
-    (CONFIG.zones || []).map(function (z) {
-      return '<span class="lg" style="--c:' + z.color + '"><i></i>' + z.id + '区 ' + esc(z.name) + '</span>';
-    }).join("") +
-    '<span class="lg" style="--c:' + INK + '"><i></i>主舞台 / 门头</span>' +
-    '<span class="lg" style="--c:#A6ABB2"><i></i>灰色 = 已收摊</span>' +
-    '<span class="lg" style="--c:#E5484D"><i></i>红点 = 为你推荐</span>' +
-    '</div>' +
+    '<div class="legend">' + legend + '</div>' +
+    layoutBar +
     '<div class="map-viewport" id="mapViewport"><div class="map-canvas" id="mapCanvas">' + mapInner + '</div></div>' +
     '<div class="map-tools">' +
     '<button class="map-btn" id="zoomIn">＋</button>' +
@@ -447,13 +809,16 @@ function renderMap() {
     '<button class="map-btn" id="zoomReset">⟲</button>' +
     '</div>' +
     '<div class="map-note">' +
-    (CONFIG.mapImage ? '以上摊位图由负责人上传，可缩放查看。' : '当前为仿百团大战的场馆平面图（布局由管理员在 js/data.js 的 MAP_LAYOUT 提前标注，仅作摊位导览、非实时导航）。') +
-    '带红点的是根据你的兴趣推荐的摊位；灰色划线格子表示该社团已收摊。点击摊位格子可查看社团详情。</div>' +
+    (imgMode
+      ? '图中圆点为摊位编号（双指/滚轮放大更清晰）：彩色 = 出摊中，灰色划线 = 已收摊，红圈 = 为你推荐。编号对应哪个社团看下方对照表，点击圆点也可直达社团详情。'
+      : '当前为仿百团大战的场馆平面图（布局由管理员在 js/data.js 的 MAP_LAYOUT 提前标注，仅作摊位导览、非实时导航）。') +
+    '带红圈的是根据你的兴趣推荐的摊位；灰色划线名牌表示该社团已收摊。</div>' +
     '</div>' +
     '<div class="booth-list">' + listRows + '</div>';
 
   setupMapCanvas();
   setupMapSearch();
+  if (imgMode) setupBoothStage();
 }
 
 /* --- 缩放 + 拖动（双指捏合 / 滚轮 / 按钮 / 拖拽） --- */
@@ -471,6 +836,7 @@ function setupMapCanvas() {
     tx = clamp(tx, Math.min(0, vw - cw * s), 0);
     ty = clamp(ty, Math.min(0, vh - ch * s), 0);
     canvas.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + s + ")";
+    vp.classList.toggle("map-detail-on", s >= 1.8);
   }
   function setScale(ns, cx, cy) { // cx/cy: 视口内缩放中心，缺省居中
     ns = clamp(ns, 1, 4);
@@ -484,6 +850,7 @@ function setupMapCanvas() {
   }
 
   vp.addEventListener("touchstart", function (e) {
+    if (state._chipDrag) return; /* 布局模式拖名牌时禁用画布平移 */
     state.mapMoved = false;
     if (e.touches.length === 1) {
       start = { x: e.touches[0].clientX, y: e.touches[0].clientY, tx: tx, ty: ty };
@@ -516,6 +883,7 @@ function setupMapCanvas() {
   });
 
   vp.addEventListener("mousedown", function (e) {
+    if (state._chipDrag) return;
     state.mapMoved = false;
     start = { x: e.clientX, y: e.clientY, tx: tx, ty: ty };
     canvas.style.transition = "none";
@@ -561,11 +929,44 @@ function setupMapCanvas() {
 }
 
 function zoomToBooth(clubId) {
-  var pos = state._boothPos && state._boothPos[clubId];
   var vp = $("#mapViewport");
   var canvas = $("#mapCanvas");
-  var svg = canvas ? canvas.querySelector(".map-svg") : null;
-  if (!pos || !vp || !canvas || !svg || !state._mapFocus) { openDetail(clubId); return; }
+  if (!vp || !canvas || !state._mapFocus) { openDetail(clubId); return; }
+
+  /* 图底模式：名牌位置是相对 bo-stage 的百分比 */
+  if (CONFIG.mapImage && CONFIG.boothLayout) {
+    var pct = state._boothPosPct && state._boothPosPct[clubId];
+    var stage = $("#boStage");
+    if (!stage) { openDetail(clubId); return; }
+    var mapImage = stage.querySelector(".bo-img");
+    if (mapImage && (!mapImage.complete || !mapImage.naturalWidth)) {
+      mapImage.addEventListener("load", function () { zoomToBooth(clubId); }, { once: true });
+      return;
+    }
+    if (!pct) {
+      var nb = CONFIG.clubs.filter(function (x) { return x.id === Number(clubId); })[0];
+      toast(nb ? "「" + nb.name + "」的摊位待定，分配后可在这里定位" : "该社团摊位待定", 2.5);
+      return;
+    }
+    state._mapFocus(stage.offsetLeft + stage.offsetWidth * pct.x / 100,
+      stage.offsetTop + stage.offsetHeight * pct.y / 100, 2.4);
+    vp.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    var chip = stage.querySelector('[data-club="' + clubId + '"]');
+    if (chip) {
+      chip.classList.add("flash");
+      setTimeout(function () { chip.classList.remove("flash"); }, 3200);
+    }
+    return;
+  }
+
+  var pos = state._boothPos && state._boothPos[clubId];
+  var svg = canvas.querySelector(".map-svg");
+  if (!svg) { openDetail(clubId); return; }
+  if (!pos) {
+    var nb2 = CONFIG.clubs.filter(function (x) { return x.id === Number(clubId); })[0];
+    toast(nb2 ? "「" + nb2.name + "」的摊位待定，分配后可在这里定位" : "该社团摊位待定", 2.5);
+    return;
+  }
   /* SVG viewBox 坐标 → 画布像素坐标 */
   var kx = svg.clientWidth / CONFIG.mapLayout.width;
   var ky = svg.clientHeight / CONFIG.mapLayout.height;
@@ -657,6 +1058,7 @@ function renderClubs() {
         (c.booth
           ? '<span class="g-booth' + (c.status === "closed" ? " off" : "") + '">' + esc(c.booth) + '</span>'
           : '<span class="g-booth pending">待定</span>') +
+        mapEntry(c) +
         '</div>';
     }).join("") + '</div>'
     : '<div class="tip-card">没有找到匹配的社团，换个关键词试试。</div>';
@@ -702,17 +1104,12 @@ function openDetail(clubId) {
     (tags ? '<div class="d-sec">兴趣标签</div><div class="d-tags">' + tags + '</div>' : "") +
     '<div class="d-sec">摊位状态</div><div class="d-status' + (c.status === "closed" ? " closed" : "") + '">' + statusText(c) + '</div>' +
     '<div class="d-sec">社团介绍</div><div class="d-intro">' + esc(c.intro) + '</div>' +
-    (c.branches ?
-'<div class="d-sec">社团分部</div><div class="d-branches">' +
-c.branches.map(function (b) {
-  // 全部生成为button，link存到data-link
-  return '<button ' +
-    'class="branch-btn" ' +
-    'data-name="' + esc(b.name) + '" ' +
-    'data-desc="' + esc(b.desc || "暂无介绍") + '" ' +
-    'data-link="' + esc(b.link || "") + '"' +
-    '>' + esc(b.name) + '</button>';
-}).join("") + '</div>' : "") +
+    (c.branches
+      ? '<div class="d-sec">社团分部</div><div class="d-branches">' +
+        c.branches.map(function (b) {
+          return '<button class="branch-btn" data-name="' + esc(b.name) + '" data-desc="' + esc(b.desc || "暂无介绍") + '" data-link="' + esc(b.link || "") + '">' + esc(b.name) + '</button>';
+        }).join("") + '</div>'
+      : "") +
     (c.activities ? '<div class="d-sec">社团活动</div><div class="d-intro">' + esc(c.activities) + '</div>' : "") +
     photoSection +
     '<div class="d-sec">关键信息</div>' +
@@ -723,57 +1120,39 @@ c.branches.map(function (b) {
       : '<div class="d-cell"><b>咨询 QQ 群</b><span>见摊位</span></div>') +
     matchCell +
     '</div>' +
-    (c.booth ? '<button class="d-btn" id="btnGoMap">' + ICONS.pin + '在地图中查看摊位</button>' : "") +
+    '<button class="d-btn" id="btnGoMap">' + ICONS.pin + '在地图中查看摊位</button>' +
     '</div>';
-// 先移除旧的居中弹窗，避免叠加
- var oldPop = document.querySelector(".branch-pop");
- if (oldPop) oldPop.remove();
- // 创建弹窗，预留游戏按钮位置
- var popBox = document.createElement("div");
- popBox.className = "branch-pop";
- popBox.innerHTML =
-   '<div class="branch-pop-card">' +
-   '<h4 id="branchPopTitle"></h4>' +
-   '<p id="branchPopDesc"></p>' +
-   '<div id="gameBtnWrap" style="display:none; margin:12px 0;">' +
-   '<a id="gameLinkBtn" target="_blank" class="pop-game-btn">进入神秘小游戏</a>' +
-   '</div>' +
-   '<button class="pop-close">关闭</button>' +
-   "</div>";
- document.body.appendChild(popBox);
- // 给圆形分部标签绑定点击事件
- document.querySelectorAll(".branch-btn").forEach(function (btn) {
-   btn.onclick = function (e) {
-     e.stopPropagation();
-     var name = this.getAttribute("data-name") || "分部介绍";
-     var desc = this.getAttribute("data-desc") || "暂无介绍";
-     var link = this.getAttribute("data-link");
-     document.getElementById("branchPopTitle").innerText = name;
-     document.getElementById("branchPopDesc").innerText = desc;
-     // 判断是否有游戏链接，有就显示游戏按钮
-     const gameWrap = document.getElementById("gameBtnWrap");
-     const gameLink = document.getElementById("gameLinkBtn");
-     if(link){
-       gameWrap.style.display = "block";
-       gameLink.href = link;
-     }else{
-       gameWrap.style.display = "none";
-     }
-     popBox.classList.add("show");
-   };
- });
- // 关闭按钮
- popBox.querySelector(".pop-close").onclick = function () {
-   popBox.classList.remove("show");
- };
- // 点击遮罩背景关闭弹窗
- popBox.onclick = function (e) {
-   if (e.target === popBox) {
-     popBox.classList.remove("show");
-   }
- };
   $("#modal").classList.remove("hidden");
   $("#btnCloseDetail").onclick = closeModal;
+  /* 分部弹窗（合并自 fly390/-1 分支）：点击分部标签弹出介绍卡片，带链接的分部显示跳转按钮 */
+  var oldPop = document.querySelector(".branch-pop");
+  if (oldPop) oldPop.remove();
+  var popBox = document.createElement("div");
+  popBox.className = "branch-pop";
+  popBox.innerHTML =
+    '<div class="branch-pop-card">' +
+    '<h4 id="branchPopTitle"></h4>' +
+    '<p id="branchPopDesc"></p>' +
+    '<div id="gameBtnWrap" style="display:none">' +
+    '<a id="gameLinkBtn" target="_blank" rel="noopener" class="pop-game-btn">进入 Game 部小游戏</a>' +
+    '</div>' +
+    '<button class="pop-close">关闭</button>' +
+    '</div>';
+  document.body.appendChild(popBox);
+  Array.prototype.forEach.call(document.querySelectorAll(".branch-btn"), function (btn) {
+    btn.onclick = function (e) {
+      e.stopPropagation();
+      document.getElementById("branchPopTitle").textContent = btn.getAttribute("data-name") || "分部介绍";
+      document.getElementById("branchPopDesc").textContent = btn.getAttribute("data-desc") || "暂无介绍";
+      var link = btn.getAttribute("data-link");
+      var gameWrap = document.getElementById("gameBtnWrap");
+      if (link) { document.getElementById("gameLinkBtn").href = link; gameWrap.style.display = "block"; }
+      else { gameWrap.style.display = "none"; }
+      popBox.classList.add("show");
+    };
+  });
+  popBox.querySelector(".pop-close").onclick = function () { popBox.classList.remove("show"); };
+  popBox.onclick = function (e) { if (e.target === popBox) popBox.classList.remove("show"); };
   var qqCell = $("#cellQQ");
   if (qqCell) qqCell.onclick = function () { copyText(c.qq, "QQ 群号已复制"); };
   var go = $("#btnGoMap");
@@ -813,6 +1192,410 @@ function closeModal() {
   $("#modal").classList.add("hidden");
 }
 
+/* ---------------- 游客端数据同步（负责人改完 ≤20 秒自动生效） ---------------- */
+function rerenderCurrent() {
+  if (state.enteredMain) switchPage(state.page);
+}
+
+function mergeRemoteClubs(list) {
+  let changed = false;
+  list.forEach(function (rc) {
+    var c = CONFIG.clubs.filter(function (x) { return x.id === rc.id; })[0];
+    if (!c) return;
+    ["name", "slogan", "intro", "activities", "qq", "logo", "status", "photos", "booth", "cat"].forEach(function (k) {
+      if (JSON.stringify(c[k]) !== JSON.stringify(rc[k])) { c[k] = rc[k]; changed = true; }
+    });
+  });
+  return changed;
+}
+
+function fetchRemote(silent) {
+  if (location.protocol === "file:") return;
+  fetch("/api/clubs").then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+    if (!j || !j.clubs) return;
+    /* 摊位布局覆盖（管理员拖动保存的位置） */
+    if (j.layout && JSON.stringify(j.layout.positions) !== JSON.stringify(CONFIG.remoteLayout && CONFIG.remoteLayout.positions)) {
+      CONFIG.remoteLayout = j.layout;
+      if (state.page === "map") { renderMap(); return; }
+    }
+    if (mergeRemoteClubs(j.clubs) && !silent) rerenderCurrent();
+  }).catch(function () { /* 离线兜底：继续用内置数据 */ });
+}
+
+setInterval(function () {
+  if (document.visibilityState === "visible") fetchRemote(false);
+}, 20000);
+
+/* ================= 负责人模式（邀请码登录，无密码） ================= */
+var LLS_KEY = "clubfair_leader_auth_v1";
+var LEAD_STATUS_TEXT = { open: "出摊中", closed: "已收摊" };
+
+function leadAuth() {
+  try { return JSON.parse(localStorage.getItem(LLS_KEY) || "null"); } catch (e) { return null; }
+}
+function leadSaveAuth(a) {
+  try {
+    if (a) localStorage.setItem(LLS_KEY, JSON.stringify(a));
+    else localStorage.removeItem(LLS_KEY);
+  } catch (e) { }
+}
+function apiFetch(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+  var a = leadAuth();
+  if (a && a.token) {
+    opts.headers.Authorization = "Bearer " + a.token;
+    opts.headers["X-Token"] = a.token; /* 双保险：部分反代会剥 Authorization */
+  }
+  if (opts.body && typeof opts.body !== "string") opts.body = JSON.stringify(opts.body);
+  return fetch(path, opts).then(function (r) {
+    var ct = r.headers.get("content-type") || "";
+    if (ct.indexOf("application/json") < 0) {
+      /* 后端不在（纯静态预览/旧版线上）时返回的是 HTML 而不是 JSON */
+      throw new Error(r.status === 404 || r.status === 405
+        ? "这里没有后端服务：负责人模式需要在部署后的正式环境使用"
+        : "服务异常（HTTP " + r.status + "），请稍后再试");
+    }
+    return r.json().then(function (j) {
+      if (!r.ok) throw new Error(j.err || ("HTTP " + r.status));
+      return j;
+    });
+  }, function () {
+    throw new Error("网络异常，请检查网络后重试");
+  });
+}
+
+function showLeader() {
+  showScreen("leader");
+  var a = leadAuth();
+  if (!a || !a.token) { renderLeaderLogin(); return; }
+  apiFetch("/api/session").then(function (j) {
+    if (j.role === "admin") renderAdminHome();
+    else if (j.club) renderLeaderConsole(j.club);
+    else { leadSaveAuth(null); renderLeaderLogin("登录状态已失效，请重新登录"); }
+  }).catch(function (e) { leadSaveAuth(null); renderLeaderLogin(e.message || "会话校验失败，请重新登录"); });
+}
+
+/* --- 登录页 --- */
+function renderLeaderLogin(msg) {
+  $("#leaderBody").innerHTML =
+    '<div class="ld-wrap">' +
+    '<div class="ld-kicker">LEADER</div>' +
+    '<h2 class="ld-title">负责人入口</h2>' +
+    '<p class="ld-sub">输入管理员发放的邀请码，绑定后可管理自己的社团摊位</p>' +
+    '<div class="search ld-input"><input id="ldCode" type="text" maxlength="12" placeholder="输入邀请码，如 A3K9QP" autocomplete="off"></div>' +
+    '<button class="cta-solid" id="ldLoginBtn">登录</button>' +
+    '<div class="ld-err" id="ldErr"></div>' +
+    '<button class="ld-back" id="ldBack">‹ 返回游客端</button>' +
+    '</div>';
+  if (msg) $("#ldErr").textContent = msg;
+  $("#ldBack").onclick = function () { history.replaceState(null, "", location.pathname); showScreen("welcome"); };
+  $("#ldLoginBtn").onclick = function () {
+    var code = $("#ldCode").value.trim();
+    if (!code) { $("#ldErr").textContent = "请输入邀请码"; return; }
+    $("#ldLoginBtn").textContent = "登录中…";
+    $("#ldLoginBtn").disabled = true;
+    apiFetch("/api/login", { method: "POST", body: { code: code } }).then(function (j) {
+      leadSaveAuth({ token: j.token, role: j.role, clubId: j.clubId });
+      showLeader();
+    }).catch(function (e) {
+      $("#ldErr").textContent = e.message;
+      $("#ldLoginBtn").textContent = "登录";
+      $("#ldLoginBtn").disabled = false;
+    });
+  };
+  $("#ldCode").addEventListener("keydown", function (e) { if (e.key === "Enter") $("#ldLoginBtn").click(); });
+}
+
+/* --- 负责人控制台 --- */
+function renderLeaderConsole(club) {
+  var closed = club.status === "closed";
+  var photos = club.photos || [];
+  $("#leaderBody").innerHTML =
+    '<div class="ld-wrap">' +
+    '<div class="ld-headrow">' +
+    '<div class="ld-logo">' + clubLogo(club) + '</div>' +
+    '<div class="ld-headmain">' +
+    '<div class="ld-name">' + esc(club.name) + '</div>' +
+    '<div class="ld-sub2">' + (club.booth ? "摊位 " + esc(club.booth) : "摊位待定（由管理员分配）") + '</div>' +
+    '</div>' +
+    '<button class="ld-logout" id="ldLogout">退出</button>' +
+    '</div>' +
+    '<div class="ld-card">' +
+    '<div class="ld-row"><span class="ld-label">摊位状态</span>' +
+    '<button class="ld-toggle' + (closed ? " off" : "") + '" id="ldToggle"><i></i><span>' + LEAD_STATUS_TEXT[closed ? "closed" : "open"] + '</span></button>' +
+    '</div>' +
+    '<div class="ld-hint">点击开关，游客端地图几秒内自动变色</div>' +
+    '</div>' +
+    '<div class="ld-card">' +
+    '<div class="ld-label">活动照片（' + photos.length + '/6）</div>' +
+    '<div class="ld-photos" id="ldPhotos">' +
+    photos.map(function (p, i) {
+      return '<div class="ld-photo"><img src="' + esc(p) + '" alt=""><button class="ld-photo-del" data-i="' + i + '">✕</button></div>';
+    }).join("") +
+    (photos.length < 6
+      ? '<button class="ld-photo add" id="ldAddPhoto"><b>＋</b><span>上传</span></button>'
+      : "") +
+    '</div>' +
+    '<div class="ld-hint">从相册选择，自动压缩；游客端详情页立即展示</div>' +
+    '</div>' +
+    '<button class="ld-menu" id="ldEdit">' +
+    '<span>编辑社团信息</span><em>口号 / 介绍 / QQ 群 / 图标</em><i>›</i></button>' +
+    '<div class="ld-foot">保存即生效 · 游客端实时同步</div>' +
+    '<input type="file" id="ldFile" accept="image/*" multiple style="display:none">' +
+    '</div>';
+
+  $("#ldLogout").onclick = function () { leadSaveAuth(null); renderLeaderLogin(); };
+  $("#ldToggle").onclick = function () {
+    var next = club.status === "closed" ? "open" : "closed";
+    this.classList.toggle("off", next === "closed");
+    this.querySelector("span").textContent = LEAD_STATUS_TEXT[next];
+    apiFetch("/api/club/" + club.id, { method: "PUT", body: { status: next } }).then(function (j) {
+      club.status = j.club.status;
+      var c = CONFIG.clubs.filter(function (x) { return x.id === club.id; })[0];
+      if (c) c.status = club.status;
+      toast(next === "open" ? "已设为出摊中" : "已设为已收摊");
+    }).catch(function (e) { toast("失败：" + e.message, 2.5); renderLeaderConsole(club); });
+  };
+  $("#ldEdit").onclick = function () { renderLeaderEditor(club); };
+  var addBtn = $("#ldAddPhoto");
+  var file = $("#ldFile");
+  if (addBtn) addBtn.onclick = function () { file.click(); };
+  file.addEventListener("change", function () { leaderUpload(club, file.files); });
+  $$("#ldPhotos .ld-photo-del").forEach(function (btn) {
+    btn.onclick = function () {
+      var i = Number(btn.getAttribute("data-i"));
+      var next = photos.slice();
+      next.splice(i, 1);
+      apiFetch("/api/club/" + club.id, { method: "PUT", body: { photos: next } }).then(function (j) {
+        club.photos = j.club.photos;
+        var c = CONFIG.clubs.filter(function (x) { return x.id === club.id; })[0];
+        if (c) c.photos = j.club.photos;
+        renderLeaderConsole(club);
+      }).catch(function (e) { toast("失败：" + e.message, 2.5); });
+    };
+  });
+}
+
+function leaderUpload(club, files) {
+  if (!files || !files.length) return;
+  toast("正在压缩上传…", 8);
+  var room = 6 - (club.photos || []).length;
+  var picked = Array.prototype.slice.call(files, 0, room);
+  var jobs = picked.map(function (f) {
+    return compressImage(f).then(function (dataUrl) {
+      return apiFetch("/api/upload", { method: "POST", body: { data: dataUrl } }).then(function (j) { return j.url; });
+    });
+  });
+  Promise.all(jobs).then(function (urls) {
+    return apiFetch("/api/club/" + club.id, { method: "PUT", body: { photos: (club.photos || []).concat(urls) } });
+  }).then(function (j) {
+    club.photos = j.club.photos;
+    var c = CONFIG.clubs.filter(function (x) { return x.id === club.id; })[0];
+    if (c) c.photos = j.club.photos;
+    toast("上传成功");
+    renderLeaderConsole(club);
+  }).catch(function (e) {
+    toast("失败：" + e.message, 2.5);
+    renderLeaderConsole(club);
+  });
+}
+
+function compressImage(file) {
+  return new Promise(function (resolve, reject) {
+    var img = new Image();
+    var url = URL.createObjectURL(file);
+    img.onload = function () {
+      var max = 1280;
+      var k = Math.min(1, max / Math.max(img.width, img.height));
+      var cv = document.createElement("canvas");
+      cv.width = Math.round(img.width * k);
+      cv.height = Math.round(img.height * k);
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      resolve(cv.toDataURL("image/jpeg", 0.82));
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("图片读取失败")); };
+    img.src = url;
+  });
+}
+
+/* 图标专用：256px + PNG（保留透明底；JPEG 会把透明区域变成黑底） */
+function compressLogoIcon(file) {
+  return new Promise(function (resolve, reject) {
+    var img = new Image();
+    var url = URL.createObjectURL(file);
+    img.onload = function () {
+      var max = 256;
+      var k = Math.min(1, max / Math.max(img.width, img.height));
+      var cv = document.createElement("canvas");
+      cv.width = Math.max(1, Math.round(img.width * k));
+      cv.height = Math.max(1, Math.round(img.height * k));
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      resolve(cv.toDataURL("image/png"));
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("图片读取失败")); };
+    img.src = url;
+  });
+}
+
+/* --- 编辑表单 --- */
+function renderLeaderEditor(club) {
+  var isAdmin = (leadAuth() || {}).role === "admin";
+  var logoIsImg = /^\/uploads\//.test(club.logo || "");
+  $("#leaderBody").innerHTML =
+    '<div class="ld-wrap">' +
+    '<div class="ld-headrow">' +
+    '<button class="ld-back2" id="ldEdBack">‹</button>' +
+    '<div class="ld-name">编辑社团信息</div>' +
+    '</div>' +
+    '<div class="ld-card form">' +
+    '<label class="ld-field"><span>社团名称' + (isAdmin ? "（管理员）" : "（不可修改）") + '</span>' +
+    '<input id="ldName" type="text" value="' + esc(club.name) + '" maxlength="20"' + (isAdmin ? "" : " disabled") + '></label>' +
+    '<label class="ld-field"><span>一句话口号</span>' +
+    '<input id="ldSlogan" type="text" value="' + esc(club.slogan || "") + '" maxlength="60" placeholder="一句话介绍你的社团"></label>' +
+    '<div class="ld-field"><span>社团图标</span>' +
+    '<div class="ld-logo-row">' +
+    '<div class="ld-logo-cur" id="ldLogoCur">' + clubLogo(club) + '</div>' +
+    '<div class="ld-logo-main">' +
+    '<button type="button" class="ld-logo-btn" id="ldLogoUp">上传图片图标</button>' +
+    '<em class="ld-logo-tip">' + (logoIsImg
+      ? "已用图片图标，游客端优先显示；输入 emoji 并保存可替换"
+      : "方形图片效果最佳，自动压缩；也可直接填 emoji") + '</em>' +
+    '</div></div></div>' +
+    '<label class="ld-field"><span>emoji 图标（选填）</span>' +
+    '<input id="ldLogo" type="text" value="' + (logoIsImg ? "" : esc(club.logo || "")) + '" maxlength="8" placeholder="如 🎸 🏀 🎮"></label>' +
+    '<label class="ld-field"><span>咨询 QQ 群</span>' +
+    '<input id="ldQq" type="text" value="' + esc(club.qq || "") + '" maxlength="30" placeholder="新生加群用"></label>' +
+    '<label class="ld-field"><span>社团介绍</span>' +
+    '<textarea id="ldIntro" maxlength="800" rows="5" placeholder="社团简介，游客端详情页展示">' + esc(club.intro || "") + '</textarea></label>' +
+    '<label class="ld-field"><span>社团活动（可选）</span>' +
+    '<textarea id="ldAct" maxlength="800" rows="3" placeholder="文化节当天/近期举办的活动">' + esc(club.activities || "") + '</textarea></label>' +
+    (isAdmin
+      ? '<label class="ld-field"><span>摊位号（仅管理员可改）</span>' +
+        '<input id="ldBooth" type="text" value="' + esc(club.booth || "") + '" maxlength="12" placeholder="如 B-01"></label>'
+      : "") +
+    '</div>' +
+    '<button class="cta-solid" id="ldSave">保存并同步到游客端</button>' +
+    '<div class="ld-err" id="ldErr2"></div>' +
+    '<input type="file" id="ldLogoFile" accept="image/*" style="display:none">' +
+    '</div>';
+  $("#ldEdBack").onclick = function () {
+    if (isAdmin) renderAdminHome(); else renderLeaderConsole(club);
+  };
+  /* 图片图标上传：压缩(256px PNG) → 上传 → 立即生效 */
+  var lf = $("#ldLogoFile");
+  $("#ldLogoUp").onclick = function () { lf.click(); };
+  lf.addEventListener("change", function () {
+    var f = lf.files && lf.files[0];
+    if (!f) return;
+    var btn = $("#ldLogoUp");
+    btn.textContent = "上传中…";
+    btn.disabled = true;
+    compressLogoIcon(f)
+      .then(function (dataUrl) { return apiFetch("/api/upload", { method: "POST", body: { data: dataUrl } }); })
+      .then(function (j) { return apiFetch("/api/club/" + club.id, { method: "PUT", body: { logo: j.url } }); })
+      .then(function (j) {
+        Object.assign(club, j.club);
+        var c = CONFIG.clubs.filter(function (x) { return x.id === club.id; })[0];
+        if (c) c.logo = j.club.logo;
+        toast("图标已更新，游客端正在同步");
+        renderLeaderEditor(club);
+      })
+      .catch(function (e) {
+        toast("失败：" + e.message, 2.5);
+        var b = $("#ldLogoUp");
+        if (b) { b.textContent = "上传图片图标"; b.disabled = false; }
+      });
+  });
+  $("#ldSave").onclick = function () {
+    var patch = {
+      slogan: $("#ldSlogan").value.trim(),
+      qq: $("#ldQq").value.trim(),
+      intro: $("#ldIntro").value.trim(),
+      activities: $("#ldAct").value.trim()
+    };
+    var logoVal = $("#ldLogo").value.trim();
+    if (logoVal) patch.logo = logoVal;                          /* 填了 emoji → 用 emoji */
+    else if (!logoIsImg) patch.logo = "";                       /* 原为 emoji 且清空 → 置空 */
+    /* 原为图片 URL 且未填 emoji → 不带 logo 字段，保持图片图标 */
+    if (isAdmin) { patch.name = $("#ldName").value.trim(); patch.booth = $("#ldBooth").value.trim(); }
+    $("#ldSave").textContent = "保存中…";
+    $("#ldSave").disabled = true;
+    apiFetch("/api/club/" + club.id, { method: "PUT", body: patch }).then(function (j) {
+      Object.assign(club, j.club);
+      var c = CONFIG.clubs.filter(function (x) { return x.id === club.id; })[0];
+      if (c) Object.assign(c, publicize(j.club));
+      toast("已保存，游客端正在同步");
+      if (isAdmin) renderAdminHome(); else renderLeaderConsole(club);
+    }).catch(function (e) {
+      $("#ldErr2").textContent = e.message;
+      $("#ldSave").textContent = "保存并同步到游客端";
+      $("#ldSave").disabled = false;
+    });
+  };
+}
+
+function publicize(c) {
+  var o = {};
+  ["name", "slogan", "intro", "activities", "qq", "logo", "status", "photos", "booth", "cat"].forEach(function (k) { o[k] = c[k]; });
+  return o;
+}
+
+/* --- 超管首页：全部社团 + 邀请码管理 --- */
+function renderAdminHome() {
+  apiFetch("/api/codes").then(function (j) {
+    var codes = {};
+    j.codes.forEach(function (x) { codes[x.id] = x.code; });
+    $("#leaderBody").innerHTML =
+      '<div class="ld-wrap">' +
+      '<div class="ld-headrow">' +
+      '<div class="ld-headmain"><div class="ld-name">管理员面板</div>' +
+      '<div class="ld-sub2">可修改所有社团 · 分配摊位 · 管理邀请码</div></div>' +
+      '<button class="ld-logout" id="ldLogout">退出</button>' +
+      '</div>' +
+      '<div class="ld-card">' +
+      '<div class="ld-batchrow"><button class="lb-btn primary" id="btnBatchAssign2">№ 按社团填号</button>' +
+      '<span class="lb-hint">给各社团/国际展位填 1-' + Object.keys(boothBasePositions()).length + ' 号摊位</span></div>' +
+      '<div class="ld-label">社团列表（点击编辑）</div>' +
+      dbListHtml(codes) +
+      '</div>' +
+      '<div class="ld-foot">邀请码请通过私聊发给对应负责人；泄露可点「换码」作废重发</div>' +
+      '</div>';
+    $("#ldLogout").onclick = function () { leadSaveAuth(null); renderLeaderLogin(); };
+    $("#btnBatchAssign2").onclick = openBatchAssign;
+    $$("#leaderBody .ld-club-row").forEach(function (row) {
+      row.onclick = function () {
+        var id = Number(row.getAttribute("data-id"));
+        var c = CONFIG.clubs.filter(function (x) { return x.id === id; })[0];
+        if (c) renderLeaderEditor(c);
+      };
+    });
+    $$("#leaderBody .ld-regen").forEach(function (btn) {
+      btn.onclick = function (e) {
+        e.stopPropagation();
+        var id = Number(btn.getAttribute("data-id"));
+        apiFetch("/api/code/regen", { method: "POST", body: { clubId: id } }).then(function (r) {
+          toast("新邀请码：" + r.code, 4);
+          renderAdminHome();
+        }).catch(function (er) { toast("失败：" + er.message, 2.5); });
+      };
+    });
+  }).catch(function (e) { renderLeaderLogin(e.message); });
+}
+
+function dbListHtml(codes) {
+  return CONFIG.clubs.map(function (c) {
+    return '<div class="ld-club-row" data-id="' + c.id + '">' +
+      '<span class="ld-club-logo">' + clubLogo(c) + '</span>' +
+      '<span class="ld-club-name">' + esc(c.name) + (c.status === "closed" ? ' <em>已收摊</em>' : "") + '</span>' +
+      '<span class="ld-code">' + esc(codes[c.id] || "----") + '</span>' +
+      '<button class="ld-regen" data-id="' + c.id + '">换码</button>' +
+      '</div>';
+  }).join("");
+}
+
 /* ---------------- 欢迎 / 开屏 ---------------- */
 function buildWelcome() {
   $("#wDate").textContent = CONFIG.eventDate;
@@ -832,6 +1615,14 @@ function bindEvents() {
   $("#btnGuide").addEventListener("click", openGuide);
   $("#btnWGuide").addEventListener("click", openGuide);
   $("#btnBrowse").addEventListener("click", enterMain);
+  $("#btnLeader").addEventListener("click", function () {
+    if (location.protocol === "file:") {
+      toast("负责人模式需要在线环境使用", 2.5);
+      return;
+    }
+    location.hash = "#leader";
+    showLeader();
+  });
   $("#btnBack").addEventListener("click", function () {
     if (state.flowStep === "tags") {
       showFlowStep("module");
@@ -877,11 +1668,24 @@ function bindEvents() {
   });
 
   $("#page-recommend").addEventListener("click", function (e) {
+    var mapButton = e.target.closest("[data-map-club]");
+    if (mapButton) {
+      e.stopPropagation();
+      switchPage("map");
+      zoomToBooth(mapButton.getAttribute("data-map-club"));
+      return;
+    }
     var card = e.target.closest(".club-card");
     if (card) openDetail(card.getAttribute("data-club"));
   });
   $("#page-map").addEventListener("click", function (e) {
-    if (state.mapMoved) return; // 拖动地图后不触发点击
+    if (e.target.closest(".map-search-wrap")) return; // 搜索结果点击由结果处理器处理，不弹详情
+    var row = e.target.closest(".bl-row[data-club]");
+    if (row) {
+      zoomToBooth(row.getAttribute("data-club"));
+      return;
+    }
+    if (state.mapMoved) return; // 拖动地图后不触发地图点击
     var t = e.target.closest("[data-club]");
     if (t) openDetail(t.getAttribute("data-club"));
   });
@@ -890,6 +1694,13 @@ function bindEvents() {
     if (chip) {
       state.cat = chip.getAttribute("data-cat");
       renderClubs();
+      return;
+    }
+    var mapButton = e.target.closest("[data-map-club]");
+    if (mapButton) {
+      e.stopPropagation();
+      switchPage("map");
+      zoomToBooth(mapButton.getAttribute("data-map-club"));
       return;
     }
     var card = e.target.closest(".g-card");
@@ -928,6 +1739,9 @@ function init() {
   syncTagGrid();
   showFlowStep(state.module ? "tags" : "module");
   showScreen("welcome");
+  /* 游客端：拉取服务端最新数据（负责人改动 ≤20 秒生效）；带 #leader 直接进负责人模式 */
+  if (location.hash === "#leader" && location.protocol !== "file:") showLeader();
+  else fetchRemote(true);
 }
 
 document.addEventListener("DOMContentLoaded", init);
