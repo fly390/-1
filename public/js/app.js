@@ -257,12 +257,6 @@ function boothPill(club) {
   return '<span class="booth-pill pending">摊位待定</span>';
 }
 
-function mapEntry(club) {
-  return club.booth
-    ? '<button class="map-entry" type="button" data-map-club="' + club.id + '">' + ICONS.pin + '在地图中查看摊位</button>'
-    : "";
-}
-
 /* 社团头像：图片图标 > 第一张活动照片 > logo emoji（data-fb 为图片加载失败兜底） */
 function clubLogo(club) {
   var logo = String(club.logo || "");
@@ -295,7 +289,6 @@ function clubCard(club, s, i, ranked) {
     '</div></div>' +
     (tags ? '<div class="c-tags">' + tags + '</div>' : "") +
     '<div class="c-foot">' + match + boothPill(club) + '<span class="c-more">查看详情 ›</span></div>' +
-    mapEntry(club) +
     '</div>';
 }
 
@@ -1058,7 +1051,6 @@ function renderClubs() {
         (c.booth
           ? '<span class="g-booth' + (c.status === "closed" ? " off" : "") + '">' + esc(c.booth) + '</span>'
           : '<span class="g-booth pending">待定</span>') +
-        mapEntry(c) +
         '</div>';
     }).join("") + '</div>'
     : '<div class="tip-card">没有找到匹配的社团，换个关键词试试。</div>';
@@ -1668,39 +1660,25 @@ function bindEvents() {
   });
 
   $("#page-recommend").addEventListener("click", function (e) {
-    var mapButton = e.target.closest("[data-map-club]");
-    if (mapButton) {
-      e.stopPropagation();
-      switchPage("map");
-      zoomToBooth(mapButton.getAttribute("data-map-club"));
-      return;
-    }
     var card = e.target.closest(".club-card");
     if (card) openDetail(card.getAttribute("data-club"));
   });
   $("#page-map").addEventListener("click", function (e) {
-    if (e.target.closest(".map-search-wrap")) return; // 搜索结果点击由结果处理器处理，不弹详情
+    if (e.target.closest(".map-search-wrap")) return;
     var row = e.target.closest(".bl-row[data-club]");
     if (row) {
       zoomToBooth(row.getAttribute("data-club"));
       return;
     }
-    if (state.mapMoved) return; // 拖动地图后不触发地图点击
-    var t = e.target.closest("[data-club]");
-    if (t) openDetail(t.getAttribute("data-club"));
+    if (state.mapMoved) return;
+    var target = e.target.closest("[data-club]");
+    if (target) openDetail(target.getAttribute("data-club"));
   });
   $("#page-clubs").addEventListener("click", function (e) {
     var chip = e.target.closest(".cat-chip2");
     if (chip) {
       state.cat = chip.getAttribute("data-cat");
       renderClubs();
-      return;
-    }
-    var mapButton = e.target.closest("[data-map-club]");
-    if (mapButton) {
-      e.stopPropagation();
-      switchPage("map");
-      zoomToBooth(mapButton.getAttribute("data-map-club"));
       return;
     }
     var card = e.target.closest(".g-card");
